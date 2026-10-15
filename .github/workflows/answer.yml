@@ -1,11 +1,13 @@
 name: Answer quiz rounds
 
-# Rounds drop at the top of each hour and full credit lasts three hours, so
-# four checks an hour is ample. Offset minutes avoid the :00/:30 rush, and
-# GitHub's raw CDN can lag a new round by ~5 minutes.
+# Rounds drop at the top of each hour; full credit lasts three hours.
+# GitHub gives no delivery guarantee for scheduled workflows and drops or
+# delays them under load, so this runs at the 5-minute minimum: ~36 chances
+# inside each round's full-credit window instead of 12. Runs are ~10s and
+# public-repo minutes are free, and a run with nothing to do commits nothing.
 on:
   schedule:
-    - cron: "7,22,37,52 * * * *"
+    - cron: "*/5 * * * *"
   workflow_dispatch:
 
 permissions:
