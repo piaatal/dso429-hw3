@@ -1,0 +1,62 @@
+name: Answer quiz rounds
+
+# Rounds drop at the top of each hour and full credit lasts three hours, so
+# four checks an hour is ample. Offset minutes avoid the :00/:30 rush, and
+# GitHub's raw CDN can lag a new round by ~5 minutes.
+on:
+  schedule:
+    - cron: "7,22,37,52 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: answer-rounds
+  cancel-in-progress: false
+
+jobs:
+  answer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # continue-on-error so a fallback answer still gets committed below;
+      # the run is failed at the end instead, after the push.
+      - name: Solve unanswered rounds
+        id: solve
+        continue-on-error: true
+        working-directory: tools
+        run: python3 submit.py | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Commit and push
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if [ -z "$(git status --porcelain answers meta)" ]; then
+            echo "no new answers to commit"
+            exit 0
+          fi
+          git add answers meta
+          git commit -m "Answer rounds ($(date -u +%Y-%m-%dT%H:%MZ))"
+          for attempt in 1 2 3; do
+            if git push; then
+              echo "pushed on attempt $attempt"
+              exit 0
+            fi
+            echo "push failed, rebasing and retrying"
+            git pull --rebase --autostash
+            sleep 5
+          done
+          echo "::error::could not push answers after 3 attempts"
+          exit 1
+
+      # Runs last, so answers are always on GitHub before the run goes red.
+      - name: Alert if any question needed a fallback
+        if: steps.solve.outcome == 'failure'
+        run: |
+          echo "::error::A question fell through to a fallback answer - the \
+          generator may have introduced an unrecognized template. Check the \
+          solve step output and add a solver family."
+          exit 1
