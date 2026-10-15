@@ -130,17 +130,6 @@ def existing_answers(rid):
         return None       # unreadable: treat as unanswered and rewrite
 
 
-def had_problems(rid):
-    path = os.path.join(META, f"round-{rid:04d}.json")
-    if not os.path.exists(path):
-        return False
-    try:
-        with open(path, encoding="utf-8") as f:
-            return bool(json.load(f).get("problems"))
-    except (json.JSONDecodeError, OSError):
-        return False
-
-
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--source", default=QUESTIONS_URL)
@@ -159,7 +148,12 @@ def main():
         fresh = rel is not None and (now - rel) < FULL_CREDIT
         current = existing_answers(rid)
 
-        if current is not None and not (fresh and had_problems(rid)):
+        # Inside the three-hour window the last version pushed is the one
+        # graded, so re-solve every fresh round -- not just ones that recorded
+        # a problem. A confidently wrong answer records nothing, and that is
+        # exactly the case a later solver fix needs to be able to correct.
+        # Past three hours the first version received is locked in, so leave it.
+        if current is not None and not fresh:
             continue
 
         if len(rows) < EXPECTED_QUESTIONS:
