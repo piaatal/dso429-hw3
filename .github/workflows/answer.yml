@@ -27,7 +27,11 @@ jobs:
         id: solve
         continue-on-error: true
         working-directory: tools
-        run: python3 submit.py | tee -a "$GITHUB_STEP_SUMMARY"
+        run: |
+          # Without pipefail the pipeline reports tee's status and
+          # submit.py's exit code 1 is swallowed, killing the alert.
+          set -o pipefail
+          python3 submit.py | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Commit and push
         run: |
