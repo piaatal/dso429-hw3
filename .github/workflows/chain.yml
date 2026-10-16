@@ -62,6 +62,15 @@ jobs:
             pass=$((pass + 1))
             echo "::group::pass $pass at $(date -u +%H:%M:%SZ)"
 
+            # The checkout is a snapshot; over 5.5 hours it goes stale if
+            # anything else pushes (a scheduled run, or a manual fix). Resync
+            # first so submit.py decides from what is really on main.
+            git pull --rebase --autostash
+            if [ $? -ne 0 ]; then
+              echo "::warning::pass $pass: pull failed, working from local state"
+              git rebase --abort 2>/dev/null
+            fi
+
             ( cd tools && python3 submit.py )
             if [ $? -ne 0 ]; then
               alert=1
