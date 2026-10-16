@@ -198,13 +198,17 @@ def match_option(value, options):
 def solve(question, options):
     """-> (letter, family) or (None, None)."""
     for name, fn in FAMILIES:
+        # Deliberately broad: any bug in a family -- overflow on a huge
+        # exponent, a bad index, a regex error -- must degrade this one
+        # question to "unknown" and let the others be answered. An escaping
+        # exception would lose the whole 25-answer file, which scores zero.
         try:
             value = fn(question)
-        except (ValueError, ZeroDivisionError, TypeError, AttributeError):
+            if value is None:
+                continue
+            letter = match_option(value, options)
+        except Exception:
             continue
-        if value is None:
-            continue
-        letter = match_option(value, options)
         if letter:
             return letter, name
     return None, None

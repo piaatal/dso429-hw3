@@ -78,7 +78,11 @@ def answer_round(rows):
     for row in rows:
         qi = int(row["q_index"])
         opts = [row["option_a"], row["option_b"], row["option_c"], row["option_d"]]
-        letter, _family = solve(row["question_text"], opts)
+        try:
+            letter, _family = solve(row["question_text"], opts)
+        except Exception as e:                      # belt and braces
+            print(f"  q{qi}: solver raised {type(e).__name__}: {e}")
+            letter = None
         if letter is None:
             letter = solve_unknown(row["question_text"], opts)
             reason = "tier2" if letter else "guess"

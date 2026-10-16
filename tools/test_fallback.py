@@ -66,5 +66,36 @@ def main():
     return 0
 
 
+def test_exploding_solver():
+    """A solver that raises must not cost the round its file."""
+    import solver
+
+    original = solver.FAMILIES
+
+    def boom(q):
+        raise OverflowError("simulated solver blow-up")
+
+    solver.FAMILIES = [("boom", boom)]
+    try:
+        answers, problems = answer_round(
+            [row(i, "anything at all", ["1", "2", "3", "4"]) for i in range(1, 26)]
+        )
+    finally:
+        solver.FAMILIES = original
+
+    failures = []
+    if len(answers) != EXPECTED_QUESTIONS:
+        failures.append(f"lost answers when the solver raised: {len(answers)}")
+    if any(v not in VALID for v in answers.values()):
+        failures.append("invalid letters after solver raised")
+    if len(problems) != EXPECTED_QUESTIONS:
+        failures.append(f"problems not recorded: {len(problems)}")
+    for f in failures:
+        print(f"FAIL: {f}")
+    if not failures:
+        print("PASS: a solver that raises still yields 25 valid answers")
+    return 1 if failures else 0
+
+
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(main() or test_exploding_solver())
