@@ -108,16 +108,28 @@ jobs:
       - name: Pace the hand-off
         run: sleep 60
 
+      # The whole chain hangs on this one call, so retry hard: a single
+      # transient API error here would silently end the chain overnight.
       - name: Start the next link
         env:
           TOKEN: ${{ secrets.CHAIN_TOKEN }}
         run: |
-          curl -fsS -X POST \
-            -H "Authorization: Bearer $TOKEN" \
-            -H "Accept: application/vnd.github+json" \
-            "https://api.github.com/repos/${{ github.repository }}/actions/workflows/chain.yml/dispatches" \
-            -d '{"ref":"main"}'
-          echo "successor dispatched"
+          set +e
+          for attempt in 1 2 3 4 5 6; do
+            code=$(curl -s -o /tmp/resp -w '%{http_code}' -X POST \
+              -H "Authorization: Bearer $TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/${{ github.repository }}/actions/workflows/chain.yml/dispatches" \
+              -d '{"ref":"main"}')
+            if [ "$code" = "204" ]; then
+              echo "successor dispatched on attempt $attempt"
+              exit 0
+            fi
+            echo "attempt $attempt failed (HTTP $code): $(cat /tmp/resp)"
+            sleep $(( attempt * 20 ))
+          done
+          echo "::error::could not dispatch the next chain run after 6 attempts - the chain has stopped and needs a manual Run workflow"
+          exit 1
 
       - name: Surface fallback alert
         if: needs.work.outputs.alert == '1'
