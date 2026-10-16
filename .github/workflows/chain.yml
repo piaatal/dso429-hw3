@@ -1,0 +1,126 @@
+name: Answer chain
+
+# GitHub's scheduler never fired for this repo, so this workflow keeps itself
+# alive instead: each run works for ~5.5 hours (under the 6h job cap), then
+# dispatches its own successor using CHAIN_TOKEN. The built-in GITHUB_TOKEN
+# cannot do this -- events it raises never start a new run (recursion guard).
+on:
+  workflow_dispatch:
+    inputs:
+      loop_minutes:
+        description: "Minutes this run should keep working before handing off"
+        required: false
+        default: "330"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: answer-chain
+  cancel-in-progress: false
+
+jobs:
+  work:
+    runs-on: ubuntu-latest
+    timeout-minutes: 345          # 15 min of headroom over the loop deadline
+    outputs:
+      alert: ${{ steps.loop.outputs.alert }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # Fail loudly now rather than 5.5 hours from now at hand-off time.
+      - name: Verify CHAIN_TOKEN works
+        env:
+          TOKEN: ${{ secrets.CHAIN_TOKEN }}
+        run: |
+          if [ -z "$TOKEN" ]; then
+            echo "::error::CHAIN_TOKEN secret is not set"; exit 1
+          fi
+          code=$(curl -s -o /dev/null -w '%{http_code}' \
+            -H "Authorization: Bearer $TOKEN" \
+            "https://api.github.com/repos/${{ github.repository }}")
+          echo "token can read the repo: HTTP $code"
+          if [ "$code" != "200" ]; then
+            echo "::error::CHAIN_TOKEN cannot read the repo (HTTP $code)"; exit 1
+          fi
+
+      - name: Answer rounds until the deadline
+        id: loop
+        env:
+          LOOP_MINUTES: ${{ inputs.loop_minutes }}
+          INTERVAL: "900"           # 15 min: ~12 attempts per 3h credit window
+        run: |
+          set +e                    # a transient failure must not kill the chain
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          end=$(( $(date +%s) + ${LOOP_MINUTES:-330} * 60 ))
+          alert=0
+          pass=0
+
+          while :; do
+            pass=$((pass + 1))
+            echo "::group::pass $pass at $(date -u +%H:%M:%SZ)"
+
+            ( cd tools && python3 submit.py )
+            if [ $? -ne 0 ]; then
+              alert=1
+              echo "::warning::pass $pass: a question needed a fallback answer"
+            fi
+
+            if [ -n "$(git status --porcelain answers meta)" ]; then
+              git add answers meta
+              git commit -m "Answer rounds ($(date -u +%Y-%m-%dT%H:%MZ))"
+              pushed=0
+              for attempt in 1 2 3; do
+                git push && { pushed=1; break; }
+                echo "push failed, rebasing (attempt $attempt)"
+                git pull --rebase --autostash
+                sleep 5
+              done
+              if [ "$pushed" -ne 1 ]; then
+                alert=1
+                echo "::warning::pass $pass: could not push after 3 attempts"
+              fi
+            else
+              echo "nothing new to commit"
+            fi
+            echo "::endgroup::"
+
+            now=$(date +%s)
+            [ "$now" -ge "$end" ] && break
+            remaining=$(( end - now ))
+            if [ "$remaining" -lt "$INTERVAL" ]; then sleep "$remaining"; else sleep "$INTERVAL"; fi
+          done
+
+          echo "completed $pass passes"
+          echo "alert=$alert" >> "$GITHUB_OUTPUT"
+
+  # A separate job, so it still runs if `work` is killed by its timeout --
+  # a step-level if:always() does not survive the job being terminated.
+  handoff:
+    needs: work
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      # Bounds the damage if something makes `work` fail instantly: without
+      # this the chain would respawn in a tight loop.
+      - name: Pace the hand-off
+        run: sleep 60
+
+      - name: Start the next link
+        env:
+          TOKEN: ${{ secrets.CHAIN_TOKEN }}
+        run: |
+          curl -fsS -X POST \
+            -H "Authorization: Bearer $TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${{ github.repository }}/actions/workflows/chain.yml/dispatches" \
+            -d '{"ref":"main"}'
+          echo "successor dispatched"
+
+      - name: Surface fallback alert
+        if: needs.work.outputs.alert == '1'
+        run: |
+          echo "::error::A question fell through to a fallback answer - check the work job log."
+          exit 1
