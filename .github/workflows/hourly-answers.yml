@@ -12,6 +12,7 @@ on:
 
 permissions:
   contents: write
+  actions: read
 
 concurrency:
   group: answer-rounds
@@ -66,3 +67,13 @@ jobs:
           generator may have introduced an unrecognized template. Check the \
           solve step output and add a solver family."
           exit 1
+
+      # Runs last, after answers are safely pushed. The chain answers rounds
+      # on time; if it dies quietly nothing fails and no email is sent, so
+      # this turns a silent death into a red run and therefore an email.
+      - name: Dead man's switch - is the chain still alive?
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        working-directory: tools
+        run: python3 check_chain_alive.py
