@@ -12,6 +12,7 @@ on:
 
 permissions:
   contents: write
+  actions: read
 
 concurrency:
   group: answer-rounds
@@ -34,6 +35,39 @@ jobs:
           # submit.py's exit code 1 is swallowed, killing the alert.
           set -o pipefail
           python3 submit.py | tee -a "$GITHUB_STEP_SUMMARY"
+
+      # Dead man's switch. The chain is what actually answers rounds on time;
+      # if it dies quietly (cancelled run, dead runner) nothing fails, so no
+      # email is sent and submissions just stop. This fires rarely -- the
+      # scheduler only delivers ~every 4h -- but a failed run here emails,
+      # which is the only thing that reaches the user when they are away.
+      - name: Dead man's switch - is the chain still alive?
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          started=$(curl -s -H "Authorization: Bearer $GH_TOKEN" \
+            "https://api.github.com/repos/${{ github.repository }}/actions/workflows/chain.yml/runs?per_page=1" \
+            | python3 -c "
+import json,sys
+try:
+    rs = json.load(sys.stdin)['workflow_runs']
+    print(rs[0]['run_started_at'] if rs else '')
+except Exception:
+    print('')")
+          if [ -z "$started" ]; then
+            echo "::error::No Answer chain run found at all - the chain is not running. Open Actions -> Answer chain -> Run workflow."
+            exit 1
+          fi
+          age=$(python3 -c "
+import datetime,sys
+t=datetime.datetime.fromisoformat('$started'.replace('Z','+00:00'))
+print(int((datetime.datetime.now(datetime.timezone.utc)-t).total_seconds()//60))")
+          echo "newest chain run started $age minutes ago"
+          # Hand-offs are ~330 min apart; 420 allows a late one without crying wolf.
+          if [ "$age" -gt 420 ]; then
+            echo "::error::The Answer chain has not started a run in $age minutes - it has stopped. Open Actions -> Answer chain -> Run workflow to restart it."
+            exit 1
+          fi
 
       - name: Commit and push
         run: |
